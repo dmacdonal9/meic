@@ -1,8 +1,9 @@
 import math
 from qualify import get_front_month_contract_date, get_front_month_contract, qualify_contract
 from options import get_atm_strike, get_today_expiry, get_closest_strike
-from orders import submit_order, calc_combo_model_price
+from orders import submit_order
 from strategies import iron_condor
+from market_data import calc_combo_model_price
 from ib_instance import ib
 
 def get_current_price(qualified_contract):

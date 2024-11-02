@@ -1,66 +1,22 @@
 from ib_insync import LimitOrder, ComboLeg, Contract
 from ib_instance import ib
+from datetime import datetime, timedelta
 import cfg
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 # Define the minimum tick sizes for various symbols
 minTick: dict[str, float] = {
     "ES": 0.05,
     "SPX": 0.1
 }
-
-
-def calc_combo_model_price(bag_contract: Contract) -> float:
-    """
-    Calculate the model price of a BAG contract based on the model option prices of each leg.
-    The final price is rounded to conform to the minimum tick size.
-
-    Parameters:
-    ib (IB): The connected IB instance to fetch contract details and market data.
-    bag_contract (Contract): The BAG contract containing multiple legs with option contracts.
-
-    Returns:
-    float: The calculated model price of the BAG contract, rounded to the nearest tick.
-    """
-    # Set IB market data type to 'theoretical' for model prices
-    ib.reqMarketDataType(4)  # 4 represents theoretical prices
-
-    # Initialize the model price of the BAG combo
-    total_model_price = 0.0
-
-    # Get the min tick size based on the underlying symbol
-    min_tick = minTick.get(bag_contract.symbol, 0.01)  # Default to 0.01 if symbol not found
-
-    # Loop through each leg in the combo
-    for combo_leg in bag_contract.comboLegs:
-        # Create the contract object for the leg using its conId
-        leg_contract = Contract(conId=combo_leg.conId, exchange=combo_leg.exchange)
-
-        # Request market data for this leg to obtain modelGreeks
-        ib.qualifyContracts(leg_contract)
-        ticker = ib.reqMktData(leg_contract, '', False, False)
-
-        # Wait until modelGreeks are available
-        while not ticker.modelGreeks:
-            ib.sleep(0.1)  # Short sleep to allow model data to populate
-
-        # Retrieve the model price (optPrice) of the leg
-        opt_price = ticker.modelGreeks.optPrice if ticker.modelGreeks else 0.0
-
-        # Adjust based on action and ratio
-        leg_price = opt_price * combo_leg.ratio
-        if combo_leg.action == 'SELL':
-            leg_price *= -1
-
-        # Add to the total model price
-        total_model_price += leg_price
-
-    # Cancel market data to clean up
-    #ib.cancelMktData(ticker)
-
-    # Round total model price to the nearest minimum tick size
-    rounded_price = round(total_model_price / min_tick) * min_tick
-
-    return rounded_price
 
 
 def submit_order(order_contract, limit_price: float, action: str, is_live: bool, quantity: int):
@@ -119,20 +75,125 @@ def create_bag(und_contract: Contract, legs: list, actions: list, ratios: list) 
 
     return bag_contract
 
-def showOrders():
-    global orderbox
+def get_active_orders():
+    """
+    Fetches and returns a list of all active orders in the IB account.
 
-    ord_string = ""
-    if ib.isConnected():
+    Returns:
+    - List of active orders (list of `Order` objects)
+    """
+    try:
+        # Log the action
+        logger.debug("Requesting active orders from IB account...")
 
-        #print("Checking for open orders to show")
-        open_orders = ib.reqAllOpenOrders()
+        # Retrieve active orders
+        active_orders = ib.reqAllOpenOrders()
 
-        for trade in open_orders:
-            # print(trade)
-            ticker = ib.reqMktData(trade.contract)
-            ib.sleep(1)
-            ord_string += f"{trade.order.account}: {trade.contract.symbol}: limit: {trade.order.lmtPrice}, market: {ticker.marketPrice()}\n"
-        ord_string += f"----------------------------\n"
+        # Log the number of active orders found
+        logger.debug(f"Number of active orders retrieved: {len(active_orders)}")
 
-        return ord_string
+        # Iterate and log each order for detailed debugging
+        for order in active_orders:
+            logger.debug(f"Active Order - ID: {order.orderId}, Symbol: {order.contract.symbol}, "
+                         f"Type: {order.orderType}, Quantity: {order.totalQuantity}, "
+                         f"Status: {order.status}")
+
+        return active_orders
+
+    except Exception as e:
+        logger.error(f"Failed to retrieve active orders: {e}")
+        return []
+
+# Test stub to call `get_active_orders` function
+def test_get_active_orders():
+    """
+    Test function to verify retrieval of active orders.
+    """
+    logger.info("Running test for get_active_orders function.")
+    active_orders = get_active_orders()
+
+    if active_orders:
+        print(f"Retrieved {len(active_orders)} active orders.")
+    else:
+        print("No active orders found.")
+
+
+def get_recently_filled_orders(timeframe='today'):
+    """
+    Retrieves a list of recently filled orders based on the specified timeframe.
+
+    Parameters:
+    - timeframe (str): 'today', 'yesterday', or a specific date range in 'YYYY-MM-DD' format.
+
+    Returns:
+    - List of filled orders (list of `Trade` objects)
+    """
+    try:
+        # Log the action
+        logger.debug(f"Requesting filled orders for timeframe: {timeframe}")
+
+        # Fetch all completed trades
+        all_trades = ib.reqExecutions()
+
+        # Define date boundaries based on timeframe
+        if timeframe == 'today':
+            start_time = datetime.combine(datetime.today(), datetime.min.time())
+        elif timeframe == 'yesterday':
+            start_time = datetime.combine(datetime.today() - timedelta(days=1), datetime.min.time())
+        else:
+            # Parse custom date format if specified
+            try:
+                start_time = datetime.strptime(timeframe, '%Y-%m-%d')
+            except ValueError:
+                logger.error("Invalid date format. Use 'today', 'yesterday', or 'YYYY-MM-DD'.")
+                return []
+
+        end_time = start_time + timedelta(days=1)
+
+        # Filter for filled orders within the timeframe
+        filled_orders = [trade for trade in all_trades if start_time <= trade.time < end_time]
+
+        # Log the number of filled orders found
+        logger.debug(f"Number of filled orders retrieved: {len(filled_orders)}")
+
+        # Log each filled order in detail
+        for trade in filled_orders:
+            logger.debug(f"Filled Order - ID: {trade.order.orderId}, Symbol: {trade.contract.symbol}, "
+                         f"Type: {trade.order.orderType}, Quantity: {trade.order.totalQuantity}, "
+                         f"Time: {trade.time}, Fill Price: {trade.execution.avgPrice}")
+
+        return filled_orders
+
+    except Exception as e:
+        logger.error(f"Failed to retrieve filled orders: {e}")
+        return []
+
+# Test stub to call `get_recently_filled_orders` function
+def test_get_recently_filled_orders():
+    """
+    Test function to verify retrieval of filled orders within a specified timeframe.
+    """
+    logger.info("Running test for get_recently_filled_orders function.")
+
+    # Testing with 'today'
+    filled_orders_today = get_recently_filled_orders('today')
+    print(f"Filled orders today: {len(filled_orders_today)}")
+
+    # Testing with 'yesterday'
+    filled_orders_yesterday = get_recently_filled_orders('yesterday')
+    print(f"Filled orders yesterday: {len(filled_orders_yesterday)}")
+
+    # Testing with a specific date
+    filled_orders_specific = get_recently_filled_orders('2024-11-01')
+    print(f"Filled orders on 2024-11-01: {len(filled_orders_specific)}")
+
+# Run the test
+if __name__ == '__main__':
+    # Ensure IB connection
+    if not ib.isConnected():
+        ib.connect('127.0.0.1', 7497, clientId=1)  # Adjust client ID and port as needed
+
+    test_get_recently_filled_orders()
+
+    # Disconnect after the test
+    ib.disconnect()
