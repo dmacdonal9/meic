@@ -56,19 +56,8 @@ if __name__ == '__main__':
 
             # now setup the pcs side
             pcs = put_credit_spread(und_contract,atm_strike,higher_strike,opt_expiry)
+            ccs = call_credit_spread(und_contract,atm_strike,higher_strike,opt_expiry)
 
-            #print(condor)
-            condor_price = calc_combo_model_price(condor)
-            print(int(condor_price))
 
-            ord_status = submit_order(order_contract=condor,
-                                      limit_price=int(condor_price),
-                                      action='BUY',
-                                      is_live=False,
-                                      quantity=1)
-            print(ord_status)
-
-    else:
-        print("ERROR: Could not determine the front-month contract.")
 
     ib.disconnect()
