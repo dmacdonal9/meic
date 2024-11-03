@@ -1,26 +1,12 @@
 import math
-from qualify import qualify_contract
+from qualify import qualify_contract, get_front_month_contract, get_front_month_contract_date
 from options import get_atm_strike, get_today_expiry, get_closest_strike
-from orders import submit_order, calc_combo_model_price
+from orders import submit_order
 from strategies import iron_condor, put_credit_spread, call_credit_spread
-from market_data import get_current_mid_price
+from market_data import get_current_mid_price, calc_combo_model_price
 from ib_instance import ib
 import cfg
 
-def get_current_price(qualified_contract):
-    try:
-        ticker = ib.reqMktData(qualified_contract, '', snapshot=True)
-        ib.sleep(1)
-        last_price = ticker.last
-        if last_price is None:
-            print("No market price available for this contract.")
-            return float('nan')
-
-        print(f"Current market price for {qualified_contract.symbol} is {last_price}")
-        return last_price
-    except Exception as e:
-        print(f"Error fetching market price: {e}")
-        return float('nan')
 
 # Main program as test stub
 if __name__ == '__main__':
@@ -54,10 +40,20 @@ if __name__ == '__main__':
             else:
                 print("ERROR: Could not determine the higher_strike.")
 
-            # now setup the pcs side
-            pcs = put_credit_spread(und_contract,atm_strike,higher_strike,opt_expiry)
-            ccs = call_credit_spread(und_contract,atm_strike,higher_strike,opt_expiry)
+            # now try to qualify all 4 contracts
+            condor = iron_condor(und_contract,atm_strike,lower_strike,higher_strike,opt_expiry)
+            #print(condor)
+            condor_price = float(calc_combo_model_price(condor))
+            print(condor_price)
 
+            ord_status = submit_order(order_contract=condor,
+                                      limit_price=condor_price,
+                                      action='BUY',
+                                      is_live=False,
+                                      quantity=1)
+            print(ord_status)
 
+    else:
+        print("ERROR: Could not qualify the underlying contract.")
 
     ib.disconnect()
