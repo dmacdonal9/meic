@@ -19,7 +19,8 @@ retry_interval = 2  # Time (in seconds) to wait between retries
 for attempt in range(max_retries):
     try:
         logger.info(f"Attempt {attempt + 1} to connect to Interactive Brokers...")
-        ib.connect(cfg.ib_host,cfg.ib_port,cfg.ib_clientid)
+        ib.connect(cfg.ib_host,cfg.ib_port,cfg.ib_clientid, readonly=True)
+        #ib.reqAccountUpdates(False, '')
         logger.info('Successfully connected to Interactive Brokers!')
         break
     except Exception as e:

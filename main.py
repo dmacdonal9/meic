@@ -1,11 +1,12 @@
 import math
 from qualify import qualify_contract, get_front_month_contract, get_front_month_contract_date
-from options import get_atm_strike, get_today_expiry, get_closest_strike
-from orders import submit_order
-from strategies import iron_condor, put_credit_spread, call_credit_spread
-from market_data import get_current_mid_price, calc_combo_model_price
+from options import get_atm_strike, get_today_expiry, get_closest_strike, get_option_by_target_price
+from strategies import put_credit_spread, call_credit_spread
+from market_data import get_current_mid_price, get_combo_prices
 from ib_instance import ib
+from orders import submit_adaptive_order_trailing_stop
 import cfg
+import sys
 
 
 # Main program as test stub
@@ -15,20 +16,28 @@ if __name__ == '__main__':
     opt_expiry = get_today_expiry()
 
     # Qualify SPX and get the current price
+    #und_contract = qualify_contract(symbol='SPX',secType='IND',exchange='CBOE',currency='USD')
     und_contract = qualify_contract(symbol='SPX',secType='IND',exchange='CBOE',currency='USD')
+
 
     if und_contract:
         current_mid = get_current_mid_price(und_contract)
+        print("Current Price:", current_mid)
+
+        contract_details = ib.reqContractDetails(und_contract)
+        min_tick = contract_details[0].minTick
 
         if not math.isnan(current_mid):
             atm_strike = get_atm_strike(und_contract, expiry=opt_expiry, current_price=current_mid, secType='OPT')
             print("ATM Strike:", atm_strike)
 
-            lower_strike_target = current_mid - cfg.long_put_width
-            lower_strike = get_closest_strike(und_contract, right='P', expiry=opt_expiry, price=lower_strike_target)
+            lower_contract, lower_put_opt_price = get_option_by_target_price(und_contract=und_contract, right='P',
+                                                                    expiry=opt_expiry, target_price=float('0.05'))
+            lower_strike = lower_contract.strike
 
-            higher_strike_target = current_mid + cfg.long_call_width
-            higher_strike = get_closest_strike(und_contract, right='C', expiry=opt_expiry, price=higher_strike_target)
+            higher_contract, higher_call_opt_price = get_option_by_target_price(und_contract=und_contract, right='C',
+                                                                    expiry=opt_expiry, target_price=float('0.05'))
+            higher_strike = higher_contract.strike
 
             if not math.isnan(lower_strike):
                 print("Lower Strike:", lower_strike)
@@ -40,18 +49,40 @@ if __name__ == '__main__':
             else:
                 print("ERROR: Could not determine the higher_strike.")
 
-            # now try to qualify all 4 contracts
-            condor = iron_condor(und_contract,atm_strike,lower_strike,higher_strike,opt_expiry)
-            #print(condor)
-            condor_price = float(calc_combo_model_price(condor))
-            print(condor_price)
+            # PCS
+            pcs, pcs_legs = put_credit_spread(und_contract,atm_strike,lower_strike,opt_expiry)
+            print("PCS LEGS: ", pcs_legs)
+            pcs_bid, pcs_mid, pcs_ask = get_combo_prices(pcs_legs)
+            print("PRICES: ", pcs_bid, pcs_mid, pcs_ask)
+            pcs_stop_loss_amt = round(abs(pcs_mid) / cfg.spx_min_tick) * cfg.spx_min_tick
+            print("STOP LOSS AMT: ", pcs_stop_loss_amt)
 
-            ord_status = submit_order(order_contract=condor,
-                                      limit_price=condor_price,
-                                      action='BUY',
-                                      is_live=False,
-                                      quantity=1)
-            print(ord_status)
+            # CCS
+            ccs, ccs_legs = call_credit_spread(und_contract,atm_strike,higher_strike,opt_expiry)
+            print("CCS LEGS: ", ccs_legs)
+            ccs_bid, ccs_mid, ccs_ask = get_combo_prices(ccs_legs)
+            print("PRICES: ", ccs_bid, ccs_mid, ccs_ask)
+            ccs_stop_loss_amt = round(abs(ccs_mid) / cfg.spx_min_tick) * cfg.spx_min_tick
+            print("STOP LOSS AMT: ", ccs_stop_loss_amt)
+
+            # ok, now let's submit a sell order for the pcs
+            pcs_order_status = submit_adaptive_order_trailing_stop(order_contract=pcs,
+                                                                     limit_price=abs(pcs_bid),
+                                                                     order_type = 'LMT',
+                                                                     action='SELL',
+                                                                     is_live=False,
+                                                                     quantity=1,
+                                                                     stop_loss_amt=pcs_stop_loss_amt
+                                                                     )
+            # ok, now let's submit a sell order for the ccs
+            ccs_order_status = submit_adaptive_order_trailing_stop(order_contract=ccs,
+                                                                     limit_price=abs(ccs_bid),
+                                                                     order_type='LMT',
+                                                                     action='SELL',
+                                                                     is_live=False,
+                                                                     quantity=1,
+                                                                     stop_loss_amt=ccs_stop_loss_amt
+                                                                     )
 
     else:
         print("ERROR: Could not qualify the underlying contract.")

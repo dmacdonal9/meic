@@ -1,7 +1,7 @@
 import logging
 import time
 import math
-from ib_insync import Contract, Ticker
+from ib_insync import Contract, ComboLeg
 from ib_instance import ib
 from qualify import qualify_contract
 
@@ -26,29 +26,9 @@ def get_current_mid_price(my_contract: Contract, max_retries=3, retry_interval=1
             ticker = ib.reqMktData(my_contract, '', refresh, False)
             ib.sleep(retry_interval)
 
-            # Check for valid bid-ask; if bid and ask are -1, check if last price is valid
-            if (ticker.bid == -1 or ticker.ask == -1) and ticker.last is not None and not math.isnan(ticker.last):
-                logger.warning(f"Bid and ask are -1 for {my_contract}. Using last price as fallback: {ticker.last}")
+            if ticker.last is not None and not math.isnan(ticker.last):
+                logger.warning(f"Invalid last_price: {ticker.last}")
                 return ticker.last
-
-            # Calculate midpoint if bid and ask are valid
-            elif ticker.bid is not None and ticker.ask is not None and ticker.bid != -1 and ticker.ask != -1:
-                mid_price = (ticker.bid + ticker.ask) / 2
-                logger.debug(f"Midpoint price for {my_contract}: {mid_price} (bid: {ticker.bid}, ask: {ticker.ask})")
-                return mid_price
-
-            # Fallback to historical data
-            elif ticker.last is None or math.isnan(ticker.last):
-                hist_data = ib.reqHistoricalData(
-                    my_contract, endDateTime='', durationStr='1 D',
-                    barSizeSetting='1 day', whatToShow='TRADES', useRTH=True
-                )
-                if hist_data:
-                    logger.info(f"Using historical trade price as fallback: {hist_data[-1].close}")
-                    return hist_data[-1].close
-                else:
-                    logger.warning(f"No historical data available as fallback for {my_contract}.")
-                    break  # Exit loop if historical data is also unavailable
 
         except Exception as e:
             logger.error(f"Error retrieving price for {my_contract} on attempt {attempt + 1}: {e}")
@@ -59,127 +39,78 @@ def get_current_mid_price(my_contract: Contract, max_retries=3, retry_interval=1
     logger.error(f"Failed to retrieve price for {my_contract} after {max_retries} attempts.")
     return None
 
+def round_to_tick(price, tick_size):
+    return round(price / tick_size) * tick_size
 
-def calc_combo_model_price(strategy_legs, min_tick=0.01, max_wait_time=5) -> float:
+def get_combo_prices(legs):
     """
-    Calculate the model price of a multi-leg option strategy based on the model option prices of each leg.
-    Falls back to bid-ask midpoint or historical close price if necessary.
+    Function to retrieve bid, mid, and ask prices for a combo contract by summing individual leg prices.
+    The logic has been corrected as per your specifications.
 
     Parameters:
-    - strategy_legs: List of tuples, each containing:
-        - leg (Contract): The option contract for the leg.
-        - action (str): 'SELL' or 'BUY' indicating the action for the leg.
-        - ratio (float): The ratio of this leg in the strategy.
-    - min_tick (float): The minimum tick size for rounding, default is 0.01.
-    - max_wait_time (int): Maximum wait time in seconds for modelGreeks data.
+    und_contract (Contract): The fully qualified underlying contract (e.g., SPX index).
+    legs (list of tuples): Each tuple contains (Contract, action, ratio) for each option leg.
 
     Returns:
-    - float: The calculated model price of the strategy, rounded to the nearest tick, or NaN if unavailable.
+    tuple: (bid, mid, ask) prices or (None, None, None) if data is unavailable.
     """
-    original_data_type = 1  # Assuming real-time data type as default
-    ib.reqMarketDataType(4)  # Set to theoretical prices initially
-    total_model_price = 0.0
+    import math
 
-    for leg_contract, action, ratio in strategy_legs:
-        ib.qualifyContracts(leg_contract)
-        ticker = ib.reqMktData(leg_contract, '', snapshot=True)
+    total_bid = 0.0
+    total_ask = 0.0
 
-        logger.debug(f"Processing leg {leg_contract.conId} ({leg_contract.symbol}) with action {action} and ratio {ratio}.")
+    # Iterate over each leg
+    for leg_contract, action, ratio in legs:
+        # Ensure each leg contract is fully qualified
+        leg_contract = ib.qualifyContracts(leg_contract)[0]
 
-        # Wait for modelGreeks to populate with a timeout
-        wait_time = 0
-        while not ticker.modelGreeks and wait_time < max_wait_time:
-            ib.sleep(0.5)
-            wait_time += 0.5
+        # Request market data for the leg
+        leg_ticker = ib.reqMktData(leg_contract, '', False, False)
 
-        # Retrieve theoretical model price (optPrice)
-        opt_price = ticker.modelGreeks.optPrice if ticker.modelGreeks else None
+        # Wait briefly for market data to populate
+        ib.sleep(1)  # Adjust the sleep time as necessary
+        print("LEG: ", action, leg_ticker.contract.strike, leg_ticker.bid, leg_ticker.ask)
 
-        # Fallback to real-time data for bid-ask midpoint if theoretical price is unavailable
-        if opt_price is None:
-            ib.reqMarketDataType(original_data_type)  # Switch to real-time data
-            logger.info(f"Switching to real-time data for leg {leg_contract.conId}.")
-            ticker = ib.reqMktData(leg_contract, '', snapshot=True)
-            ib.sleep(1)  # Allow time for bid/ask data to populate
+        # Retrieve bid and ask prices
+        bid = leg_ticker.bid
+        ask = leg_ticker.ask
 
-            bid = ticker.bid if ticker.bid is not None else 'N/A'
-            ask = ticker.ask if ticker.ask is not None else 'N/A'
+        # Cancel market data subscription for the leg
+        ib.cancelMktData(leg_ticker)
 
-            # Check if both bid and ask are -1, indicating no data; if so, fallback to historical
-            if bid == -1 and ask == -1:
-                # Switch to historical data mode
-                ib.reqMarketDataType(3)
-                logger.info(f"Falling back to historical data for leg {leg_contract.conId}.")
+        # Handle None or NaN values by assuming 0
+        if bid is None or math.isnan(bid) or bid == -1.0:
+            bid = 0.0
+        if ask is None or math.isnan(ask) or ask == -1.0:
+            ask = 0.0
 
-                hist_data = ib.reqHistoricalData(
-                    leg_contract, endDateTime='', durationStr='1 D',
-                    barSizeSetting='1 day', whatToShow='TRADES', useRTH=True
-                )
-                if hist_data:
-                    opt_price = hist_data[-1].close
-                    logger.info(f"Using historical close price for leg {leg_contract.conId}: {opt_price}")
-                else:
-                    logger.error(f"No data available for leg: {leg_contract.conId}, skipping this leg.")
-                    continue  # Skip this leg if no price data is available
+        # For total bid price
+        if action.upper() == 'BUY':
+            # Add bid price of BUY leg
+            total_bid -= bid * ratio
+        elif action.upper() == 'SELL':
+            # Subtract bid price of SELL leg
+            total_bid += bid * ratio
+        else:
+            raise ValueError(f"Invalid action {action} for leg {leg_contract.localSymbol}")
 
-                # Switch back to theoretical data for next leg
-                ib.reqMarketDataType(4)
+        # For total ask price
+        if action.upper() == 'BUY':
+            # Add ask price of BUY leg
+            total_ask -= ask * ratio
+        elif action.upper() == 'SELL':
+            # Subtract ask price of SELL leg
+            total_ask += ask * ratio
+        else:
+            raise ValueError(f"Invalid action {action} for leg {leg_contract.localSymbol}")
 
-            elif isinstance(bid, float) and isinstance(ask, float):
-                # If bid and ask are valid, calculate midpoint
-                opt_price = (bid + ask) / 2
-                logger.warning(f"Falling back to midpoint for leg {leg_contract.conId}: {opt_price}")
-            else:
-                # No valid data found even after attempting midpoint
-                logger.error(f"No valid model price or bid/ask data available for leg: {leg_contract.conId}. Skipping this leg.")
-                continue
+    # Calculate mid price as average of total bid and total ask
+    mid = (total_bid + total_ask) / 2.0
 
-        # Adjust based on action and ratio
-        leg_price = opt_price * ratio
-        if action == 'SELL':
-            leg_price *= -1
+    # Round the mid price to the nearest tick size
+    mid = round_to_tick(mid, 0.1)
+    total_bid = round_to_tick(total_bid,0.1)
+    total_ask = round_to_tick(total_ask,0.1)
 
-        total_model_price += leg_price
-        logger.debug(f"Leg {leg_contract.conId} contributes {'-' if action == 'SELL' else ''}{leg_price} to total.")
-
-        # Cancel market data for each leg
-        ib.cancelMktData(ticker)
-
-    # Validate total_model_price to ensure it's a number
-    if math.isnan(total_model_price):
-        logger.error("Total model price is NaN. Check data sources for missing information.")
-        return float('nan')
-
-    rounded_price = round(total_model_price / min_tick) * min_tick
-    logger.info(f"Total model price of strategy (rounded): {rounded_price}")
-
-    return rounded_price
-def test_calc_model_price():
-    """
-    Test function for calc_model_price to verify it calculates the correct model price for a multi-leg strategy.
-    """
-    leg1 = qualify_contract(symbol='SPX', secType='OPT', lastTradeDateOrContractMonth='20241104', exchange='CBOE',
-                            currency='USD', strike=5700, right='P')
-    leg2 = qualify_contract(symbol='SPX', secType='OPT', lastTradeDateOrContractMonth='20241104', exchange='CBOE',
-                            currency='USD', strike=5750, right='P')
-    leg3 = qualify_contract(symbol='SPX', secType='OPT', lastTradeDateOrContractMonth='20241104', exchange='CBOE',
-                            currency='USD', strike=5800, right='C')
-    leg4 = qualify_contract(symbol='SPX', secType='OPT', lastTradeDateOrContractMonth='20241104', exchange='CBOE',
-                            currency='USD', strike=5850, right='C')
-
-    strategy_legs = [
-        (leg1, 'SELL', 1),
-        (leg2, 'BUY', 1),
-        (leg3, 'SELL', 1),
-        (leg4, 'BUY', 1)
-    ]
-
-    model_price = calc_combo_model_price(strategy_legs)
-    print(f"Calculated Model Price for Test Strategy: {model_price}")
-
-    assert not math.isnan(model_price), "Model price should be calculated and not NaN."
-    print("Test passed: Model price calculation works as expected.")
-
-
-# Run the test
-test_calc_model_price()
+    print("get_combo_prices(): Returning prices: ", total_bid, mid, total_ask)
+    return total_bid, mid, total_ask

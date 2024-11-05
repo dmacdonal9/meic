@@ -119,29 +119,30 @@ def put_credit_spread(und_contract, short_strike, long_strike, opt_expiry):
 
     # Define legs, actions, and ratios for the PCS
     legs = [sell_put, buy_put]
-    actions = ['SELL', 'BUY']
+    actions = ['BUY', 'SELL']
     ratios = [1, 1]
 
-    # Create the BAG order for the put credit spread
+    # Construct a list of tuples, each containing a leg contract, action, and ratio
+    strategy_legs = [(leg, action, ratio) for leg, action, ratio in zip(legs, actions, ratios)]
+
     pcs = create_bag(und_contract, legs, actions, ratios)
 
-    # Return both the BAG order and the individual legs
-    return pcs, legs
+    return pcs, strategy_legs
 
 
 def call_credit_spread(und_contract, short_strike, long_strike, opt_expiry):
     """
-    Creates a Call Credit Spread (CCS) using two option legs on the specified underlying contract.
+    Creates a Put Credit Spread (PCS) using two option legs on the specified underlying contract.
 
     Parameters:
     - und_contract: The underlying contract for which the options are created.
-    - short_strike: The strike price of the short call option.
-    - long_strike: The strike price of the long call option.
+    - short_strike: The strike price of the short put option.
+    - long_strike: The strike price of the long put option.
     - opt_expiry: The expiration date for the options (YYYYMMDD format).
 
     Returns:
     - A tuple containing:
-        1. A BAG order for the call credit spread.
+        1. A BAG order for the put credit spread.
         2. A list of the qualified contracts (legs) used in the spread.
     """
     # Determine secType for option contract based on underlying secType
@@ -154,7 +155,7 @@ def call_credit_spread(und_contract, short_strike, long_strike, opt_expiry):
         lastTradeDateOrContractMonth=opt_expiry,
         exchange=und_contract.exchange,
         strike=short_strike,
-        right='C',  # 'C' for Call
+        right='C',  # 'P' for Put
         multiplier=und_contract.multiplier
     )
 
@@ -165,17 +166,18 @@ def call_credit_spread(und_contract, short_strike, long_strike, opt_expiry):
         lastTradeDateOrContractMonth=opt_expiry,
         exchange=und_contract.exchange,
         strike=long_strike,
-        right='C',  # 'C' for Call
+        right='C',  # 'P' for Put
         multiplier=und_contract.multiplier
     )
 
-    # Define legs, actions, and ratios for the CCS
+    # Define legs, actions, and ratios for the PCS
     legs = [sell_call, buy_call]
-    actions = ['SELL', 'BUY']
+    actions = ['BUY', 'SELL']
     ratios = [1, 1]
 
-    # Create the BAG order for the call credit spread
+    # Construct a list of tuples, each containing a leg contract, action, and ratio
+    strategy_legs = [(leg, action, ratio) for leg, action, ratio in zip(legs, actions, ratios)]
+
     ccs = create_bag(und_contract, legs, actions, ratios)
 
-    # Return both the BAG order and the individual legs
-    return ccs, legs
+    return ccs, strategy_legs

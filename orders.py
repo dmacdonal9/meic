@@ -1,6 +1,7 @@
-from ib_insync import LimitOrder, ComboLeg, Contract
+from ib_insync import LimitOrder, ComboLeg, Contract, Order, TagValue
 from ib_instance import ib
 from datetime import datetime, timedelta
+from typing import Optional
 import cfg
 import logging
 
@@ -19,7 +20,91 @@ minTick: dict[str, float] = {
 }
 
 
-def submit_order(order_contract, limit_price: float, action: str, is_live: bool, quantity: int):
+def submit_adaptive_order_trailing_stop(
+        order_contract: Contract,
+        limit_price: float,
+        order_type: str,
+        action: str,
+        is_live: bool,
+        quantity: int,
+        stop_loss_amt: float
+    ) -> Optional[Order]:
+    """
+    Submit an adaptive order (market or limit) with a linked trailing stop loss as a bracket order in TWS.
+
+    Parameters:
+        order_contract (Contract): The contract to trade.
+        limit_price (float): The limit price for the order (ignored if order_type is 'MKT').
+        order_type (str): 'MKT' or 'LMT'.
+        action (str): 'BUY' or 'SELL'.
+        is_live (bool): Whether to submit as a live order (True) or paper (False).
+        quantity (int): Number of units to trade.
+        stop_loss_amt (float): The trailing amount for the stop loss order.
+
+    Returns:
+        Optional[Order]: The primary order object if successful, else None.
+    """
+
+    # Update contract to use SMART exchange
+    order_contract.exchange = 'SMART'
+
+    # Ensure valid action
+    if action not in ["BUY", "SELL"]:
+        logger.error(f"Invalid action: {action}. Must be 'BUY' or 'SELL'.")
+        return None
+
+    # Ensure valid order_type
+    if order_type not in ["MKT", "LMT"]:
+        logger.error(f"Invalid order type: {order_type}. Must be 'MKT' or 'LMT'.")
+        return None
+
+    # Create the primary adaptive order
+    primary_order = Order(
+        orderType=order_type,
+        action=action,
+        totalQuantity=quantity,
+        tif='DAY',
+        algoStrategy='Adaptive',
+        algoParams=[TagValue('adaptivePriority', 'Normal')],
+        transmit=False  # Hold transmission until child is set up
+    )
+
+    # Set limit price if order_type is 'LMT'
+    if order_type == 'LMT':
+        primary_order.lmtPrice = limit_price
+
+    # Place the primary order to get the orderId
+    ib.placeOrder(order_contract, primary_order)
+    ib.sleep(1)  # Allow time for the order ID to populate
+
+    # Verify the primary order has an ID
+    if not primary_order.orderId:
+        logger.error("Primary order failed to generate an order ID.")
+        return None
+
+    # Create the trailing stop order as a child of the primary order
+    trailing_stop_order = Order(
+        orderType='TRAIL',
+        action='SELL' if action == 'BUY' else 'BUY',
+        totalQuantity=quantity,
+        auxPrice=stop_loss_amt,
+        parentId=primary_order.orderId,  # Link to the primary order
+        tif='DAY',
+        transmit=is_live  # This will transmit both orders together
+    )
+
+    # Place the trailing stop order
+    ib.placeOrder(order_contract, trailing_stop_order)
+
+    # Log success or failure
+    if primary_order.orderId and trailing_stop_order.orderId:
+        logger.info("Adaptive order with linked trailing stop submitted successfully")
+    else:
+        logger.error("Order submission failed")
+
+    return primary_order
+
+def submit_limit_order(order_contract, limit_price: float, action: str, is_live: bool, quantity: int):
     order = LimitOrder(action=action, lmtPrice=limit_price, transmit=is_live, totalQuantity=quantity)
     print("submit_order: ", limit_price, action, is_live, quantity)
     # Set the orderRef field
@@ -167,33 +252,3 @@ def get_recently_filled_orders(timeframe='today'):
     except Exception as e:
         logger.error(f"Failed to retrieve filled orders: {e}")
         return []
-
-# Test stub to call `get_recently_filled_orders` function
-def test_get_recently_filled_orders():
-    """
-    Test function to verify retrieval of filled orders within a specified timeframe.
-    """
-    logger.info("Running test for get_recently_filled_orders function.")
-
-    # Testing with 'today'
-    filled_orders_today = get_recently_filled_orders('today')
-    print(f"Filled orders today: {len(filled_orders_today)}")
-
-    # Testing with 'yesterday'
-    filled_orders_yesterday = get_recently_filled_orders('yesterday')
-    print(f"Filled orders yesterday: {len(filled_orders_yesterday)}")
-
-    # Testing with a specific date
-    filled_orders_specific = get_recently_filled_orders('2024-11-01')
-    print(f"Filled orders on 2024-11-01: {len(filled_orders_specific)}")
-
-# Run the test
-if __name__ == '__main__':
-    # Ensure IB connection
-    if not ib.isConnected():
-        ib.connect('127.0.0.1', 7497, clientId=1)  # Adjust client ID and port as needed
-
-    test_get_recently_filled_orders()
-
-    # Disconnect after the test
-    ib.disconnect()
