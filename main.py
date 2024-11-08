@@ -70,7 +70,7 @@ if __name__ == '__main__':
             ccs_stop_loss_amt = round(abs(ccs_mid) / cfg.spx_min_tick) * cfg.spx_min_tick
             print("STOP LOSS AMT: ", ccs_stop_loss_amt)
 
-            # ok, now let's submit a sell order for the pcs
+            # ok, now let's submit a sell order for the pcs side
             pcs_order_status = submit_adaptive_order_trailing_stop(order_contract=pcs,
                                                                      limit_price=abs(pcs_bid),
                                                                      order_type = 'LMT',
