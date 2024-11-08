@@ -65,6 +65,7 @@ def submit_adaptive_order_trailing_stop(
         totalQuantity=quantity,
         tif='DAY',
         algoStrategy='Adaptive',
+        orderRef = cfg.myStrategyTag,
         algoParams=[TagValue('adaptivePriority', 'Normal')],
         transmit=False  # Hold transmission until child is set up
     )
@@ -89,6 +90,7 @@ def submit_adaptive_order_trailing_stop(
         totalQuantity=quantity,
         auxPrice=stop_loss_amt,
         parentId=primary_order.orderId,  # Link to the primary order
+        orderRef=cfg.myStrategyTag,
         tif='DAY',
         transmit=is_live  # This will transmit both orders together
     )

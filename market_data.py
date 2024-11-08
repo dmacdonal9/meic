@@ -76,7 +76,7 @@ def get_combo_prices(legs):
         ask = leg_ticker.ask
 
         # Cancel market data subscription for the leg
-        ib.cancelMktData(leg_ticker)
+        #ib.cancelMktData(leg_ticker)
 
         # Handle None or NaN values by assuming 0
         if bid is None or math.isnan(bid) or bid == -1.0:

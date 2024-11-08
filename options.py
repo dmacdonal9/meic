@@ -111,22 +111,23 @@ def get_atm_strike(qualified_contract, expiry, current_price, secType):
 
 
 
-def get_option_by_target_price(und_contract, right, expiry, target_price):
+def get_option_by_target_price(und_contract, right, expiry, target_price, atm_strike):
     """
     Find the option (put or call) whose ask price is closest to the target ask price.
     If multiple options have the same ask price, return the one with the highest strike price.
 
     Parameters:
-    ib (IB): An instance of the IB class from ib_insync, already connected.
     und_contract (Contract): The underlying contract (e.g., Stock or Future).
     right (str): 'P' for put or 'C' for call.
     expiry (str): The expiration date in 'YYYYMMDD' format.
-    target_ask_price (float): The target ask price.
+    target_price (float): The target ask price.
+    atm_strike (float): The at-the-money strike price to limit option search.
 
     Returns:
     Option: The option contract that meets the criteria.
     """
-    logging.info(f"Starting search for option on {und_contract.symbol} with right '{right}', expiry '{expiry}', and target ask price {target_price}.")
+    logging.info(f"Starting search for option on {und_contract.symbol} with right '{right}', expiry '{expiry}', "
+                 f"target ask price {target_price}, and ATM strike {atm_strike}.")
 
     # Get option chain parameters for the underlying contract
     try:
@@ -137,23 +138,25 @@ def get_option_by_target_price(und_contract, right, expiry, target_price):
         logging.error(f"Error retrieving option chains: {e}")
         return None, None
 
-    # Collect all strikes and trading classes for the given expiry
+    # Collect strikes and filter based on right and atm_strike
     all_strikes = set()
     trading_classes = set()
     for chain in chains:
         if expiry in chain.expirations:
-            all_strikes.update(chain.strikes)
+            if right == 'P':
+                all_strikes.update([strike for strike in chain.strikes if strike <= atm_strike])
+            elif right == 'C':
+                all_strikes.update([strike for strike in chain.strikes if strike >= atm_strike])
             trading_classes.add(chain.tradingClass)
-    logging.debug(f"Filtered strikes matching expiry: {sorted(all_strikes)}")
+    logging.debug(f"Filtered strikes matching expiry and ATM filtering: {sorted(all_strikes)}")
     logging.debug(f"Trading classes: {trading_classes}")
 
     if not all_strikes:
-        logging.warning("No strikes found for the given expiry.")
+        logging.warning("No strikes found for the given expiry and ATM filtering.")
         return None, None
 
     # Sort strikes in ascending order
     strikes = sorted(all_strikes)
-    logging.debug(f"Sorted strikes: {strikes}")
 
     # Create option contracts for each strike with the desired right
     contracts = []
@@ -164,11 +167,11 @@ def get_option_by_target_price(und_contract, right, expiry, target_price):
                 lastTradeDateOrContractMonth=expiry,
                 strike=strike,
                 right=right,
-                exchange='SMART',  # Use 'SMART' or specify an exchange like 'CBOE'
+                exchange='SMART',
                 currency=und_contract.currency,
                 tradingClass=trading_class)
             contracts.append(option)
-    logging.debug(f"Created {len(contracts)} option contracts with right '{right}'.")
+    logging.debug(f"Created {len(contracts)} option contracts with right '{right}' and filtered strikes.")
 
     # Qualify contracts to get conIds
     qualified_contracts = ib.qualifyContracts(*contracts)
@@ -180,26 +183,24 @@ def get_option_by_target_price(und_contract, right, expiry, target_price):
 
     # Request market data for all qualified contracts
     tickers = ib.reqTickers(*qualified_contracts)
-    ib.sleep(2)  # Increase sleep time as needed
+    ib.sleep(2)  # Adjust sleep time as needed
     logging.debug(f"Market data tickers retrieved: {tickers}")
 
     # Filter out options without valid ask prices
     valid_options = []
     for ticker in tickers:
-        if right == 'P':
-            if ticker.ask != float('inf') and ticker.ask > 0:
-                valid_options.append((ticker.contract, ticker.ask))
-        else:
-            if ticker.bid != float('inf') and ticker.bid > 0:
-                valid_options.append((ticker.contract, ticker.bid))
+        if right == 'P' and ticker.ask != float('inf') and ticker.ask > 0:
+            valid_options.append((ticker.contract, ticker.ask))
+        elif right == 'C' and ticker.bid != float('inf') and ticker.bid > 0:
+            valid_options.append((ticker.contract, ticker.bid))
 
-    logging.debug(f"Options with valid ask prices: {valid_options}")
+    logging.debug(f"Options with valid ask/bid prices: {valid_options}")
 
     if not valid_options:
-        logging.warning("No options with valid ask prices found.")
+        logging.warning("No options with valid ask/bid prices found.")
         return None, None
 
-    # Find the options whose ask price is closest to the target ask price
+    # Find the options whose ask/bid price is closest to the target price
     if right == 'P':
         min_diff = min(abs(ask - target_price) for _, ask in valid_options)
         closest_options = [(contract, ask) for contract, ask in valid_options if abs(ask - target_price) == min_diff]
@@ -209,8 +210,12 @@ def get_option_by_target_price(und_contract, right, expiry, target_price):
 
     logging.debug(f"Options with minimum price difference: {closest_options}")
 
-    # If multiple options have the same minimum difference, select the one with the highest strike price
-    closest_options.sort(key=lambda x: x[0].strike, reverse=True)
+    # If multiple options have the same minimum difference, select the one with the highest/lowest strike price
+    if right == 'P':
+        closest_options.sort(key=lambda x: x[0].strike, reverse=True)
+    else:
+        closest_options.sort(key=lambda x: x[0].strike, reverse=False)
+
     selected_option = closest_options[0][0]
     selected_price = closest_options[0][1]
 

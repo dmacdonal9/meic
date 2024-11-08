@@ -32,11 +32,16 @@ if __name__ == '__main__':
             print("ATM Strike:", atm_strike)
 
             lower_contract, lower_put_opt_price = get_option_by_target_price(und_contract=und_contract, right='P',
-                                                                    expiry=opt_expiry, target_price=float('0.05'))
+                                                                             expiry=opt_expiry,
+                                                                             target_price=float('0.05'),
+                                                                             atm_strike=atm_strike)
             lower_strike = lower_contract.strike
 
             higher_contract, higher_call_opt_price = get_option_by_target_price(und_contract=und_contract, right='C',
-                                                                    expiry=opt_expiry, target_price=float('0.05'))
+                                                                                expiry=opt_expiry,
+                                                                                target_price=float('0.05'),
+                                                                                atm_strike=atm_strike)
+
             higher_strike = higher_contract.strike
 
             if not math.isnan(lower_strike):
@@ -70,7 +75,7 @@ if __name__ == '__main__':
                                                                      limit_price=abs(pcs_bid),
                                                                      order_type = 'LMT',
                                                                      action='SELL',
-                                                                     is_live=False,
+                                                                     is_live=True,
                                                                      quantity=1,
                                                                      stop_loss_amt=pcs_stop_loss_amt
                                                                      )
@@ -79,7 +84,7 @@ if __name__ == '__main__':
                                                                      limit_price=abs(ccs_bid),
                                                                      order_type='LMT',
                                                                      action='SELL',
-                                                                     is_live=False,
+                                                                     is_live=True,
                                                                      quantity=1,
                                                                      stop_loss_amt=ccs_stop_loss_amt
                                                                      )
